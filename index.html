@@ -1,7 +1,24 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Forerunner 3</title><style>body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Forerunner 3</title>
+  <style>
+    body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
     canvas { border: 1px solid #333; }
     #ui { position: fixed; top: 0; left: 0; width: 100%; z-index: 10; pointer-events: none; }
     #ui * { pointer-events: auto; }
     #ui-bottom { position: fixed; bottom: 0; left: 0; width: 100%; z-index: 10; pointer-events: none; }
     #ui-bottom * { pointer-events: auto; }
-    #ui *, #ui-bottom * { transition: color 300ms ease, background 300ms ease, background-color 300ms ease, border-color 300ms ease; }</style><script defer="defer" src="tles.js" onerror=""></script><script defer="defer" src="bundle.js"></script></head><body><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div></body></html>
+    #ui *, #ui-bottom * { transition: color 300ms ease, background 300ms ease, background-color 300ms ease, border-color 300ms ease; }
+  </style>
+  <script defer src="tles.js" onerror=""></script>
+<script defer src="bundle.js"></script></head>
+<body>
+  <div id="ui"></div>
+  <canvas id="canvas" width="800" height="600"></canvas>
+  <div id="ui-bottom"></div>
+  <div id="ui-modals"></div>
+</body>
+</html>
