@@ -1,8 +1,10 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Forerunner 3</title><style>body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>Forerunner 3</title><style>body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
     canvas { border: 1px solid #333; }
-    #ui { position: fixed; top: 0; left: 0; width: 100%; z-index: 10; pointer-events: none; }
+    #ui { position: fixed; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none;
+           padding-top: env(safe-area-inset-top, 0px); }
     #ui * { pointer-events: auto; }
-    #ui-bottom { position: fixed; bottom: 0; left: 0; width: 100%; z-index: 10; pointer-events: none; }
+    #ui-bottom { position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; pointer-events: none;
+                 padding-bottom: env(safe-area-inset-bottom, 0px); }
     #ui-bottom * { pointer-events: auto; }
     #ui *, #ui-bottom * { transition: color 300ms ease, background 300ms ease, background-color 300ms ease, border-color 300ms ease; }
 
@@ -315,7 +317,7 @@
       var versionEl = document.getElementById('loader-version');
       if (versionEl) {
         var versionStr = 'V1.1.2';
-        var subbuild = '09:46:21';
+        var subbuild = '09:58:36';
         if (subbuild) versionStr += '_' + subbuild;
         versionEl.textContent = versionStr;
         versionEl.style.display = 'block';
