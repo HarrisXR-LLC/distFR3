@@ -59,6 +59,15 @@
       user-select: none; letter-spacing: 0.5px;
     }
 
+    /* Version info — shown under quote when devmode is baked in */
+    #loader-version {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 9px; font-weight: 400;
+      color: #444; margin-top: 12px;
+      user-select: none; letter-spacing: 0.5px;
+      display: none; /* shown via JS when devmode is on */
+    }
+
     /* Astronaut quote — shown during loading */
     #loader-quote {
       font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -67,7 +76,7 @@
       user-select: none; text-align: center;
       line-height: 1.4;
       max-width: 250px;
-    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-quote"></div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div><script>// ============================================================
+    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-quote"></div><div id="loader-version"></div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div><script>// ============================================================
   //  Loading screen — dual-path script loader with progress tracking
   //
   //  TWO LOADING PATHS:
@@ -298,6 +307,19 @@
     var quoteEl = document.getElementById('loader-quote');
     if (quoteEl) {
       quoteEl.textContent = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+    }
+
+    // Show version under quote when devmode is baked in
+    var forceMobileDebug = true;
+    if (forceMobileDebug) {
+      var versionEl = document.getElementById('loader-version');
+      if (versionEl) {
+        var versionStr = 'V1.1.2';
+        var subbuild = '09:46:21';
+        if (subbuild) versionStr += '_' + subbuild;
+        versionEl.textContent = versionStr;
+        versionEl.style.display = 'block';
+      }
     }
 
     // --- Hide loader ---
