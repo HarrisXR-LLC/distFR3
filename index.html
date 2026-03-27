@@ -14,6 +14,12 @@
       transition: opacity 0.8s ease;
     }
     #loader-overlay.fade-out { opacity: 0; pointer-events: none; }
+
+    #loader-container {
+      width: 250px;
+      display: flex; flex-direction: column; align-items: center;
+    }
+
     #loader-title {
       font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       font-size: 22px; font-weight: 300; letter-spacing: 4px;
@@ -22,7 +28,7 @@
     #loader-subtitle {
       font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       font-size: 13px; font-weight: 400; letter-spacing: 2px;
-      user-select: none;
+      user-select: none; margin-bottom: 16px;
       background: linear-gradient(90deg, #888 0%, #ddd 40%, #888 80%);
       background-size: 200% 100%;
       -webkit-background-clip: text;
@@ -34,231 +40,295 @@
       0%   { background-position: 200% 0; }
       100% { background-position: -200% 0; }
     }
-    #loader-canvas { margin-top: 16px; }</style><script defer="defer" src="tles.js" onerror=""></script><script defer="defer" src="bundle.js"></script></head><body><div id="loader-overlay"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-subtitle">Loading...</div><canvas id="loader-canvas"></canvas></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div><script>// ============================================================
-  //  Loading screen — self-contained, no external dependencies
+
+    /* Progress bar track — dark recessed socket */
+    #loader-bar-track {
+      width: 200px; height: 6px;
+      background: #0a0a0a;
+      border-radius: 3px;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8), inset 0 0 1px rgba(0, 0, 0, 0.5);
+      border: 1px solid #222;
+      overflow: hidden;
+    }
+
+    /* Progress bar fill — white/gray animated gradient (darker gray for visibility) */
+    #loader-bar-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, #777 0%, #ddd 50%, #777 100%);
+      background-size: 200% 100%;
+      animation: bar-shimmer 1.5s ease-in-out infinite;
+      transition: width 0.15s ease-out;
+    }
+    @keyframes bar-shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Status text */
+    #loader-status {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 10px; font-weight: 400;
+      color: #666; margin-top: 8px;
+      user-select: none; letter-spacing: 0.5px;
+    }
+
+    /* Astronaut quote — shown during loading */
+    #loader-quote {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 10px; font-weight: 300; font-style: italic;
+      color: #fff; margin-top: 16px;
+      user-select: none; text-align: center;
+      line-height: 1.4;
+      max-width: 250px;
+    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-subtitle">Loading...</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-quote"></div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div><script>// ============================================================
+  //  Loading screen — dual-path script loader with progress tracking
+  //
+  //  TWO LOADING PATHS:
+  //
+  //  PATH 1 — HTTP/HTTPS (dev server, production, GitHub Pages):
+  //    Uses fetch() + ReadableStream to download scripts in PARALLEL
+  //    with byte-accurate progress tracking via Content-Length headers.
+  //    Once all downloads finish, scripts are injected in ORDER
+  //    (tles.js before bundle.js) since bundle depends on TLE data.
+  //
+  //  PATH 2 — file:// (opening dist/index.html directly):
+  //    fetch() is blocked by CORS on the file:// protocol, so we fall
+  //    back to injecting <script src="..."> tags sequentially. Progress
+  //    is stage-based (jumps per file) rather than byte-accurate, but
+  //    everything loads and executes correctly.
+  //
+  //  ADDING NEW SCRIPTS:
+  //    Just add an entry to the FILES array. Both paths use it.
+  //    Scripts download in parallel (PATH 1) but always execute in
+  //    the order listed.
+  //
+  //  LOADER LIFECYCLE:
+  //    The loader stays visible until the main app calls window.hideLoader()
+  //    after its first frame renders. This prevents a blank flash between
+  //    the loader fading out and the WebGL canvas being ready.
+  //    See main.ts: if (!loaderHidden) { window.hideLoader(); }
   // ============================================================
   (function() {
-    var cv = document.getElementById('loader-canvas');
-    var ctx = cv.getContext('2d');
-    var running = true;
-    var startTime = Date.now();
+    // --- Configurable resource list ---
+    // Add new scripts here. They download in parallel but execute in this order.
+    var FILES = [
+      { url: 'tles.js',   label: 'TLE data' },
+      { url: 'bundle.js', label: 'application' }
+    ];
 
-    // --- Sizing ---
-    function resize() {
-      var dpr = window.devicePixelRatio || 1;
-      var dim = Math.min(window.innerWidth, window.innerHeight);
-      var size = Math.round(dim * 0.55); // canvas covers enough area for orbits
-      cv.width = size * dpr;
-      cv.height = size * dpr;
-      cv.style.width = size + 'px';
-      cv.style.height = size + 'px';
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    resize();
-    window.addEventListener('resize', resize);
+    var barFill = document.getElementById('loader-bar-fill');
+    var statusEl = document.getElementById('loader-status');
+    var isFileProtocol = window.location.protocol === 'file:';
 
-    // --- Constants ---
-    function getR() { return Math.min(cv.clientWidth, cv.clientHeight) * 0.20; }
-    var TAU = Math.PI * 2;
+    // ================================================================
+    //  PATH 1 — HTTP/HTTPS: fetch() with byte-accurate progress
+    // ================================================================
+    function loadViaFetch() {
+      // Track download state for each file
+      var fileStates = FILES.map(function(f) {
+        return { url: f.url, label: f.label, loaded: 0, total: 0, done: false, text: null };
+      });
 
-    // --- Simple hash-based noise for planet dots ---
-    function hash(x, y) {
-      var n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-      return n - Math.floor(n);
-    }
+      // --- Update progress bar and status text ---
+      function updateProgress() {
+        var totalBytes = 0;
+        var loadedBytes = 0;
+        var activeLabels = [];
 
-    // --- Generate planet surface dots (once, in spherical coords) ---
-    var planetDots = [];
-    (function() {
-      for (var i = 0; i < 600; i++) {
-        var lat = (Math.random() - 0.5) * Math.PI;
-        var lon = Math.random() * TAU;
-        var n = hash(Math.floor(lon * 5), Math.floor(lat * 5 + 10));
-        // ~65% water (blue), ~35% land (green)
-        var isLand = n > 0.60;
-        planetDots.push({ lat: lat, lon: lon, land: isLand });
+        for (var i = 0; i < fileStates.length; i++) {
+          var s = fileStates[i];
+          totalBytes += s.total;
+          loadedBytes += s.loaded;
+          if (!s.done) activeLabels.push(s.label);
+        }
+
+        // Calculate percentage. If Content-Length was missing for any file,
+        // total might be 0 — show indeterminate state.
+        var pct = totalBytes > 0 ? Math.min(100, (loadedBytes / totalBytes) * 100) : 0;
+        barFill.style.width = pct + '%';
+
+        if (activeLabels.length > 0) {
+          statusEl.textContent = 'Loading ' + activeLabels.join(' & ') + '...';
+        } else {
+          statusEl.textContent = 'Initializing...';
+        }
       }
-    })();
 
-    // --- Generate satellite orbits ---
-    var MAX_SATS = 100;
-    var satellites = [];
-    (function() {
-      for (var i = 0; i < MAX_SATS; i++) {
-        var incl = (Math.random() - 0.5) * 60 * (Math.PI / 180); // ±30 degrees
-        var raan = Math.random() * TAU;                           // orbital plane rotation
-        var alt = 1.3 + Math.random() * 0.9;                      // 1.3R to 2.2R from center
-        var speed = 0.3 + Math.random() * 0.5;                    // angular speed variation
-        var phase = Math.random() * TAU;                           // starting position
-        satellites.push({
-          incl: incl, raan: raan, alt: alt,
-          speed: speed, phase: phase,
-          spawnTime: (i + 1) * 1000, // spawn every 1000ms
-          opacity: 0
+      // --- Fetch a single file with byte-level streaming progress ---
+      function fetchWithProgress(index) {
+        var file = FILES[index];
+        var state = fileStates[index];
+
+        return fetch(file.url).then(function(response) {
+          var contentLength = response.headers.get('Content-Length');
+          state.total = contentLength ? parseInt(contentLength, 10) : 0;
+
+          // If no ReadableStream support or no Content-Length, simple fallback
+          if (!response.body || !contentLength) {
+            return response.text().then(function(text) {
+              state.text = text;
+              state.loaded = state.total || text.length;
+              state.total = state.loaded;
+              state.done = true;
+              updateProgress();
+            });
+          }
+
+          // Stream the response, tracking bytes as they arrive
+          var reader = response.body.getReader();
+          var chunks = [];
+          var received = 0;
+
+          function read() {
+            return reader.read().then(function(result) {
+              if (result.done) {
+                var blob = new Blob(chunks);
+                return blob.text().then(function(text) {
+                  state.text = text;
+                  state.done = true;
+                  updateProgress();
+                });
+              }
+              chunks.push(result.value);
+              received += result.value.length;
+              state.loaded = received;
+              updateProgress();
+              return read();
+            });
+          }
+
+          return read();
         });
       }
-    })();
 
-    // --- 3D projection (simple perspective) ---
-    function project(x, y, z, cx, cy, R) {
-      // Rotate around Y axis for spin
-      var scale = R * 2.8 / (2.8 + z); // mild perspective
-      return { x: cx + x * scale, y: cy - y * scale, z: z, scale: scale / R };
-    }
+      // --- Inject a script from downloaded text ---
+      function injectScript(text) {
+        return new Promise(function(resolve) {
+          var script = document.createElement('script');
+          script.textContent = text;
+          document.body.appendChild(script);
+          resolve();
+        });
+      }
 
-    function rotY(x, y, z, a) {
-      var c = Math.cos(a), s = Math.sin(a);
-      return { x: x * c + z * s, y: y, z: -x * s + z * c };
-    }
+      // Fetch all files in parallel for fastest download
+      var fetches = FILES.map(function(_, i) {
+        return fetchWithProgress(i);
+      });
 
-    function rotX(x, y, z, a) {
-      var c = Math.cos(a), s = Math.sin(a);
-      return { x: x, y: y * c - z * s, z: y * s + z * c };
-    }
+      // Once all downloads complete, inject scripts in order.
+      // Order matters: tles.js sets up global TLE data that bundle.js
+      // needs at parse time. Injecting out of order would crash the app.
+      Promise.all(fetches).then(function() {
+        statusEl.textContent = 'Initializing...';
 
-    // --- Orbit position from orbital elements ---
-    function satPosition(sat, angle) {
-      // Position in orbital plane
-      var ox = Math.cos(angle) * sat.alt;
-      var oy = Math.sin(angle) * sat.alt;
-      // Apply inclination (tilt out of equatorial plane)
-      var r1 = rotX(ox, oy, 0, sat.incl);
-      // Apply RAAN (rotate orbital plane around Y)
-      var r2 = rotY(r1.x, r1.y, r1.z, sat.raan);
-      return r2;
-    }
-
-    // --- Draw frame ---
-    function draw() {
-      if (!running) return;
-      var w = cv.clientWidth;
-      var h = cv.clientHeight;
-      var cx = w / 2;
-      var cy = h / 2;
-      var R = getR();
-      var elapsed = (Date.now() - startTime) / 1000;
-      var spinAngle = elapsed * 0.15; // gentle spin
-
-      ctx.clearRect(0, 0, w, h);
-
-      // === Wireframe Earth ===
-      // Longitude lines
-      ctx.strokeStyle = 'rgba(100, 100, 100, 0.3)';
-      ctx.lineWidth = 0.5;
-      for (var lon = 0; lon < 12; lon++) {
-        var lonAngle = lon * (TAU / 12);
-        ctx.beginPath();
-        for (var t = 0; t <= 64; t++) {
-          var lat = (t / 64) * Math.PI - Math.PI / 2;
-          var px = Math.cos(lat) * Math.cos(lonAngle + spinAngle) * R;
-          var py = Math.sin(lat) * R;
-          var pz = Math.cos(lat) * Math.sin(lonAngle + spinAngle) * R;
-          var p = project(px, py, pz, cx, cy, R);
-          if (t === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
+        var chain = Promise.resolve();
+        for (var i = 0; i < fileStates.length; i++) {
+          (function(idx) {
+            chain = chain.then(function() {
+              return injectScript(fileStates[idx].text);
+            });
+          })(i);
         }
-        ctx.stroke();
-      }
+        return chain;
+      }).catch(function(err) {
+        statusEl.textContent = 'Error loading: ' + err.message;
+        console.error('Loader error:', err);
+      });
+    }
 
-      // Latitude lines
-      for (var lat = -2; lat <= 2; lat++) {
-        var latAngle = lat * (Math.PI / 6);
-        ctx.beginPath();
-        for (var t = 0; t <= 64; t++) {
-          var lonA = (t / 64) * TAU + spinAngle;
-          var px = Math.cos(latAngle) * Math.cos(lonA) * R;
-          var py = Math.sin(latAngle) * R;
-          var pz = Math.cos(latAngle) * Math.sin(lonA) * R;
-          var p = project(px, py, pz, cx, cy, R);
-          if (t === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
-        }
-        ctx.stroke();
-      }
+    // ================================================================
+    //  PATH 2 — file:// : <script src> tags with stage-based progress
+    //  fetch() is blocked by CORS on file://, so we inject <script> tags
+    //  with src attributes, which the browser loads natively. Progress
+    //  jumps per-file (not byte-accurate) but everything works correctly.
+    // ================================================================
+    function loadViaScriptTags() {
+      var loaded = 0;
+      var total = FILES.length;
 
-      // === Planet surface dots (blue water, green land) ===
-      for (var i = 0; i < planetDots.length; i++) {
-        var d = planetDots[i];
-        var px = Math.cos(d.lat) * Math.cos(d.lon + spinAngle) * R;
-        var py = Math.sin(d.lat) * R;
-        var pz = Math.cos(d.lat) * Math.sin(d.lon + spinAngle) * R;
-        // Only draw front-facing dots
-        if (pz > 0) continue; // behind the sphere center (facing away)
-        var p = project(px, py, pz, cx, cy, R);
-        var dotAlpha = 0.5 + 0.3 * (-pz / R);
-        ctx.fillStyle = d.land
-          ? 'rgba(80, 180, 80, ' + dotAlpha + ')'
-          : 'rgba(70, 130, 200, ' + dotAlpha + ')';
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 1.2 * p.scale, 0, TAU);
-        ctx.fill();
-      }
-
-      // === Satellites + orbit trails ===
-      var elapsedMs = Date.now() - startTime;
-      for (var i = 0; i < MAX_SATS; i++) {
-        var sat = satellites[i];
-        if (elapsedMs < sat.spawnTime) continue;
-
-        // Fade in over 800ms
-        var fadeAge = elapsedMs - sat.spawnTime;
-        sat.opacity = Math.min(1, fadeAge / 800);
-
-        var currentAngle = sat.phase + elapsed * sat.speed;
-
-        // --- Orbit trail ---
-        var trailSegments = 48;
-        var trailSpan = TAU * 0.92; // trail covers ~92% of orbit, gap before satellite
-        // Grow trail from 0 to full over first 3 seconds after spawn
-        var trailGrowth = Math.min(1, fadeAge / 3000);
-        var actualSpan = trailSpan * trailGrowth;
-
-        for (var t = 0; t < trailSegments - 1; t++) {
-          var frac0 = t / trailSegments;
-          var frac1 = (t + 1) / trailSegments;
-          var a0 = currentAngle - actualSpan * frac0;
-          var a1 = currentAngle - actualSpan * frac1;
-          var pos0 = satPosition(sat, a0);
-          var pos1 = satPosition(sat, a1);
-          var r0 = rotY(pos0.x * R, pos0.y * R, pos0.z * R, spinAngle);
-          var r1 = rotY(pos1.x * R, pos1.y * R, pos1.z * R, spinAngle);
-          var p0 = project(r0.x, r0.y, r0.z, cx, cy, R);
-          var p1 = project(r1.x, r1.y, r1.z, cx, cy, R);
-
-          // Opacity fades along trail: full near satellite (frac=0), zero at tail (frac=1)
-          var segAlpha = (1 - frac1) * sat.opacity * 0.5;
-          ctx.strokeStyle = 'rgba(180, 180, 180, ' + segAlpha + ')';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(p0.x, p0.y);
-          ctx.lineTo(p1.x, p1.y);
-          ctx.stroke();
+      // Load scripts one at a time, in order, to guarantee dependencies.
+      // tles.js must finish executing before bundle.js is loaded.
+      function loadNext(index) {
+        if (index >= total) {
+          statusEl.textContent = 'Initializing...';
+          barFill.style.width = '100%';
+          return;
         }
 
-        // --- Satellite dot ---
-        var pos = satPosition(sat, currentAngle);
-        var rp = rotY(pos.x * R, pos.y * R, pos.z * R, spinAngle);
-        var sp = project(rp.x, rp.y, rp.z, cx, cy, R);
-        ctx.fillStyle = 'rgba(100, 149, 237, ' + sat.opacity + ')'; // azure blue #6495ED
-        ctx.beginPath();
-        ctx.arc(sp.x, sp.y, 1.5 * sp.scale, 0, TAU);
-        ctx.fill();
+        var file = FILES[index];
+        statusEl.textContent = 'Loading ' + file.label + '...';
+
+        var script = document.createElement('script');
+        script.src = file.url;
+
+        script.onload = function() {
+          loaded++;
+          // Stage-based progress: each file is an equal fraction of the bar.
+          // Not byte-proportional, but functional for file:// usage.
+          barFill.style.width = ((loaded / total) * 100) + '%';
+          loadNext(index + 1);
+        };
+
+        script.onerror = function() {
+          statusEl.textContent = 'Error loading ' + file.label;
+          console.error('Failed to load:', file.url);
+        };
+
+        document.body.appendChild(script);
       }
 
-      requestAnimationFrame(draw);
+      loadNext(0);
     }
 
-    requestAnimationFrame(draw);
+    // --- Choose loading path based on protocol ---
+    if (isFileProtocol) {
+      // file:// — use script tags (fetch is blocked by CORS)
+      loadViaScriptTags();
+    } else {
+      // http(s):// — use fetch with streaming progress
+      loadViaFetch();
+    }
 
-    // --- Hide loader (called by main app) ---
+    // --- Astronaut quotes — shown as a reward before "drawing the curtains" ---
+    var QUOTES = [
+      '"That\'s one small step for man, one giant leap for mankind." \u2014 Neil Armstrong',
+      '"The Earth is the cradle of humanity, but one cannot live in a cradle forever." \u2014 Konstantin Tsiolkovsky',
+      '"I looked and looked but I didn\'t see God." \u2014 Yuri Gagarin',
+      '"The sky is not the limit. It\'s just the view." \u2014 Buzz Aldrin',
+      '"For all its material advantages, the sedentary life has left us edgy, unfulfilled." \u2014 Carl Sagan',
+      '"Once you\'ve been in space, you appreciate how small and fragile the Earth is." \u2014 Valentina Tereshkova',
+      '"Exploration is really the essence of the human spirit." \u2014 Frank Borman',
+      '"Somewhere, something incredible is waiting to be known." \u2014 Carl Sagan',
+      '"The universe is under no obligation to make sense to you." \u2014 Neil deGrasse Tyson',
+      '"To confine our attention to terrestrial matters would be to limit the human spirit." \u2014 Stephen Hawking',
+      '"I know the sky is not the limit, because there are footprints on the Moon." \u2014 Buzz Aldrin',
+      '"Earth is a very small stage in a vast cosmic arena." \u2014 Carl Sagan',
+      '"The stars don\'t look bigger, but they do look brighter." \u2014 Sally Ride',
+      '"Space is for everybody. It\'s not just for a few people in science or math." \u2014 Christa McAuliffe'
+    ];
+
+    // Show a random quote immediately while loading
+    var quoteEl = document.getElementById('loader-quote');
+    if (quoteEl) {
+      quoteEl.textContent = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+    }
+
+    // --- Hide loader ---
+    // Called by the main app (main.ts) after its first frame renders.
+    // Holds for ~1 second to let assets settle and give the user a moment
+    // to read the quote, then fades out the loader overlay.
+    // The main app contains: if (!loaderHidden) { window.hideLoader(); }
     window.hideLoader = function() {
-      running = false;
       var overlay = document.getElementById('loader-overlay');
       if (!overlay) return;
-      overlay.classList.add('fade-out');
+
+      // Hold for 1 second to let assets settle, then fade out
       setTimeout(function() {
-        overlay.remove();
-        window.removeEventListener('resize', resize);
-      }, 900);
+        overlay.classList.add('fade-out');
+        setTimeout(function() { overlay.remove(); }, 900);
+      }, 1000);
     };
   })();</script></body></html>
