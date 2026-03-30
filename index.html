@@ -1,4 +1,6 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>Forerunner 3</title><style>body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>Forerunner 3</title><style>body { margin: 0; background: #111; display: flex; justify-content: flex-start; align-items: flex-start;
+           height: 100vh; height: 100dvh; /* dvh overrides vh on modern browsers — correct mobile viewport */
+           overflow: hidden; }
     canvas { border: 1px solid #333; }
     #ui { position: fixed; top: 0; left: 0; width: 100%; z-index: 10; pointer-events: none;
            padding-top: env(safe-area-inset-top, 0px); }
@@ -73,8 +75,8 @@
     /* Astronaut quote — shown during loading */
     #loader-quote {
       font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      font-size: 10px; font-weight: 300; font-style: italic;
-      color: #fff; margin-top: 16px;
+      font-size: 15px; font-weight: 300; font-style: italic;
+      color: #fff; margin-top: 32px; margin-bottom: 32px;
       user-select: none; text-align: center;
       line-height: 1.4;
       max-width: 250px;
@@ -107,6 +109,39 @@
   //    See main.ts: if (!loaderHidden) { window.hideLoader(); }
   // ============================================================
   (function() {
+    // --- Mobile/desktop decision (made once, at page open) ---
+    // Currently driven by FORCE_MOBILE_DEBUG (baked by webpack from .bat env var).
+    // Later: auto-detection (viewport size, touch, UA).
+    var forceMobileDebug = true;
+
+    // --- Canvas sizing (viewport × DPR) ---
+    // Primes the canvas at native resolution from page open.
+    // Ready for future WebGL loading visuals (procedural wireframe, etc.).
+    // applyFullSize() in the bundle will take over via its own resize listeners.
+    var canvas = document.getElementById('canvas');
+    if (canvas) {
+      function sizeCanvas() {
+        var pixelRatio = window.devicePixelRatio || 1;  // fresh each call (DPR can change)
+        var vv = window.visualViewport;
+        var vw = vv ? vv.width : window.innerWidth;
+        var vh = vv ? vv.height : window.innerHeight;
+        canvas.width = vw * pixelRatio;
+        canvas.height = vh * pixelRatio;
+        canvas.style.width = vw + 'px';
+        canvas.style.height = vh + 'px';
+        canvas.style.border = 'none';
+        canvas.style.margin = '0';
+      }
+
+      sizeCanvas();
+
+      // Keep canvas correct if mobile URL bar hides/shows during loading
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', sizeCanvas);
+      }
+      window.addEventListener('resize', sizeCanvas);
+    }
+
     // --- Configurable resource list ---
     // Add new scripts here. They download in parallel but execute in this order.
     var FILES = [
@@ -311,13 +346,29 @@
       quoteEl.textContent = QUOTES[Math.floor(Math.random() * QUOTES.length)];
     }
 
-    // Show version under quote when devmode is baked in
-    var forceMobileDebug = true;
+    // --- Mobile overlay adjustments + version display ---
     if (forceMobileDebug) {
+      // Widen loader container and quote to use more of the narrow mobile screen
+      var container = document.getElementById('loader-container');
+      if (container) {
+        container.style.width = '85vw';
+        container.style.maxWidth = '400px';
+      }
+      var quoteEl2 = document.getElementById('loader-quote');
+      if (quoteEl2) {
+        quoteEl2.style.maxWidth = '85vw';
+      }
+      // Widen progress bar to fill wider container
+      var barTrack = document.getElementById('loader-bar-track');
+      if (barTrack) {
+        barTrack.style.width = '100%';
+      }
+
+      // Show version under quote when devmode is baked in
       var versionEl = document.getElementById('loader-version');
       if (versionEl) {
-        var versionStr = 'V1.1.2';
-        var subbuild = '19:27:39';
+        var versionStr = 'V1.1.4';
+        var subbuild = '09:45:13';
         if (subbuild) versionStr += '_' + subbuild;
         versionEl.textContent = versionStr;
         versionEl.style.display = 'block';
