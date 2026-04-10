@@ -63,6 +63,36 @@
       user-select: none; letter-spacing: 0.5px;
     }
 
+    /* Error panel shown after 20s or on explicit error */
+    #loader-error {
+      display: none;
+      margin-top: 16px;
+      text-align: center;
+    }
+    #loader-error-msg {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 12px; font-weight: 400;
+      color: #c66; margin-bottom: 8px;
+      user-select: none;
+    }
+    #loader-error-code {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 10px; font-weight: 400;
+      color: #888; margin-bottom: 12px;
+      user-select: none;
+    }
+    #loader-retry-btn {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 12px; font-weight: 400;
+      color: #ccc; background: #333; border: 1px solid #555;
+      border-radius: 4px; padding: 6px 18px;
+      cursor: pointer; user-select: none;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+    #loader-retry-btn:hover {
+      background: #444; border-color: #777;
+    }
+
     /* Version info — shown under quote when devmode is baked in */
     #loader-version {
       font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -80,7 +110,7 @@
       user-select: none; text-align: center;
       line-height: 1.4;
       max-width: 250px;
-    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-quote"></div><div id="loader-version"></div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div><script>// ============================================================
+    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-error"><div id="loader-error-msg">Something may have gone wrong.</div><div id="loader-error-code"></div><button id="loader-retry-btn">Retry</button></div><div id="loader-quote"></div><div id="loader-version"></div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div><script>// ============================================================
   //  Loading screen — dual-path script loader with progress tracking
   //
   //  TWO LOADING PATHS:
@@ -367,12 +397,89 @@
       // Show version under quote when devmode is baked in
       var versionEl = document.getElementById('loader-version');
       if (versionEl) {
-        var versionStr = 'V1.1.4';
-        var subbuild = '09:59:07';
+        var versionStr = 'V1.1.7';
+        var subbuild = '21:02:22';
         if (subbuild) versionStr += '_' + subbuild;
         versionEl.textContent = versionStr;
         versionEl.style.display = 'block';
       }
+    }
+
+    // --- Tiered init timeout ---
+    // After scripts finish loading and "Initializing..." appears, start timing.
+    // 10s → show spinner (still working indicator)
+    // 20s → show "Something may have gone wrong" + error code + retry button
+    var initTimerStarted = false;
+    var initTimer10 = null;
+    var initTimer20 = null;
+    var initErrorCode = null;
+    var loaderDone = false;
+
+    function startInitTimer() {
+      if (initTimerStarted) return;
+      initTimerStarted = true;
+
+      initTimer10 = setTimeout(function() {
+        if (loaderDone) return;
+        var statusEl2 = document.getElementById('loader-status');
+        if (statusEl2) statusEl2.textContent = 'Initializing... ...';
+      }, 10000);
+
+      initTimer20 = setTimeout(function() {
+        if (loaderDone) return;
+        showInitError(initErrorCode || 'E0', 'Initialization timed out');
+      }, 20000);
+    }
+
+    function showInitError(code, detail) {
+      var errorPanel = document.getElementById('loader-error');
+      var errorCodeEl = document.getElementById('loader-error-code');
+      if (errorPanel) errorPanel.style.display = 'block';
+      if (errorCodeEl) errorCodeEl.textContent = 'Error code: ' + code;
+      // Console logging is handled by reportInitError() in the bundle — no double-log here.
+    }
+
+    // Called by main.ts (via tle-manager.ts or directly) when a specific init step fails
+    window.setInitError = function(code, detail) {
+      initErrorCode = code;
+      // If the 20s timer hasn't fired yet, show immediately
+      if (!loaderDone) {
+        if (initTimer10) clearTimeout(initTimer10);
+        if (initTimer20) clearTimeout(initTimer20);
+        showInitError(code, detail);
+      }
+    };
+
+    // Called by the bundle when an init error fires AFTER the loader has already been dismissed.
+    // 4/5/26 --AH Ready to wire into a toast system as a future todo
+    window.notifyLateInitError = function(code, detail) {
+      if (loaderDone) {
+        console.warn('[Late init error] ' + code + ': ' + detail);
+      }
+    };
+
+    // Retry button — full page reload
+    var retryBtn = document.getElementById('loader-retry-btn');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', function() {
+        window.location.reload();
+      });
+    }
+
+    // Start the init timer once "Initializing..." is shown.
+    // For PATH 1 (fetch), this happens after Promise.all resolves.
+    // For PATH 2 (script tags), this happens after all scripts load.
+    // We watch for the status text change via a MutationObserver on #loader-status.
+    var statusObserver = new MutationObserver(function() {
+      var s = document.getElementById('loader-status');
+      if (s && s.textContent && s.textContent.indexOf('nitializing') !== -1) {
+        startInitTimer();
+        statusObserver.disconnect();
+      }
+    });
+    var statusTarget = document.getElementById('loader-status');
+    if (statusTarget) {
+      statusObserver.observe(statusTarget, { childList: true, characterData: true, subtree: true });
     }
 
     // --- Hide loader ---
@@ -381,6 +488,10 @@
     // to read the quote, then fades out the loader overlay.
     // The main app contains: if (!loaderHidden) { window.hideLoader(); }
     window.hideLoader = function() {
+      loaderDone = true;
+      if (initTimer10) clearTimeout(initTimer10);
+      if (initTimer20) clearTimeout(initTimer20);
+
       var overlay = document.getElementById('loader-overlay');
       if (!overlay) return;
 
