@@ -10,6 +10,33 @@
     #ui-bottom * { pointer-events: auto; }
     #ui *, #ui-bottom * { transition: color 300ms ease, background 300ms ease, background-color 300ms ease, border-color 300ms ease; }
 
+    /* --- HUD safe frame + outer screen area zones (desktop only) ---
+       Zone containers are click-transparent; only rendered children catch pointer events.
+       Mobile hides both zones via body.layout-mobile (phase 1 is desktop-only). */
+    #ui-zone-outerscreenarea, #ui-zone-hudsafeframe { pointer-events: none; }
+    #ui-zone-outerscreenarea > *, #ui-zone-hudsafeframe > * { pointer-events: auto; }
+    #ui-zone-outerscreenarea {
+      position: fixed; inset: 0;
+      z-index: 20;
+    }
+    #ui-zone-hudsafeframe {
+      position: fixed;
+      top: var(--fr-top-bar-occupied-px);
+      bottom: var(--fr-bottom-bar-occupied-px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(
+        100vw,
+        calc(
+          (100dvh - var(--fr-top-bar-occupied-px) - var(--fr-bottom-bar-occupied-px))
+          * var(--fr-hud-safe-aspect)
+        )
+      );
+      z-index: 30;
+    }
+    body.layout-mobile #ui-zone-outerscreenarea,
+    body.layout-mobile #ui-zone-hudsafeframe { display: none; }
+
     /* --- Loading screen --- */
     #loader-overlay {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -117,7 +144,7 @@
       user-select: none; text-align: center;
       line-height: 1.4;
       max-width: 250px;
-    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-error"><div id="loader-error-msg">Something may have gone wrong.</div><div id="loader-error-code"></div><button id="loader-retry-btn">Retry</button></div><div id="loader-quote"></div><div id="loader-version"></div><div id="loader-copyright">(C) 2026 HarrisXR LLC</div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-modals"></div><script>// ============================================================
+    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-error"><div id="loader-error-msg">Something may have gone wrong.</div><div id="loader-error-code"></div><button id="loader-retry-btn">Retry</button></div><div id="loader-quote"></div><div id="loader-version"></div><div id="loader-copyright">(C) 2026 HarrisXR | Space Interactions Inc.</div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-zone-outerscreenarea"></div><div id="ui-zone-hudsafeframe"></div><div id="ui-modals"></div><script>// ============================================================
   //  Loading screen — dual-path script loader with progress tracking
   //
   //  TWO LOADING PATHS:
@@ -404,8 +431,8 @@
       // Show version under quote when devmode is baked in
       var versionEl = document.getElementById('loader-version');
       if (versionEl) {
-        var versionStr = 'V1.1.16';
-        var subbuild = '14:46:59';
+        var versionStr = 'V1.1.22';
+        var subbuild = '18:36:44';
         if (subbuild) versionStr += '_' + subbuild;
         versionEl.textContent = versionStr;
         versionEl.style.display = 'block';
