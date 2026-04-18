@@ -2,48 +2,112 @@
            height: 100vh; height: 100dvh; /* dvh overrides vh on modern browsers — correct mobile viewport */
            overflow: hidden; }
     canvas { border: 1px solid #333; }
-    #ui { position: fixed; top: 0; left: 0; width: 100%; z-index: 10; pointer-events: none;
+    #ui { position: fixed; top: 0; left: 0; width: 100%; z-index: var(--fr-z-bar); pointer-events: none;
            padding-top: env(safe-area-inset-top, 0px); }
     #ui * { pointer-events: auto; }
-    #ui-bottom { position: fixed; bottom: 0; left: 0; width: 100%; z-index: 10; pointer-events: none;
+    #ui-bottom { position: fixed; bottom: 0; left: 0; width: 100%; z-index: var(--fr-z-bar); pointer-events: none;
                  padding-bottom: env(safe-area-inset-bottom, 0px); }
     #ui-bottom * { pointer-events: auto; }
     #ui *, #ui-bottom * { transition: color 300ms ease, background 300ms ease, background-color 300ms ease, border-color 300ms ease; }
 
-    /* --- HUD safe frame + outer screen area zones (desktop only) ---
-       Zone containers are click-transparent; only rendered children catch pointer events.
-       Mobile hides both zones via body.layout-mobile (phase 1 is desktop-only). */
-    #ui-zone-outerscreenarea, #ui-zone-hudsafeframe { pointer-events: none; }
-    #ui-zone-outerscreenarea > *, #ui-zone-hudsafeframe > * { pointer-events: auto; }
-    #ui-zone-outerscreenarea {
-      position: fixed; inset: 0;
-      z-index: 20;
-    }
-    #ui-zone-hudsafeframe {
+    /* --- Zone system (#ui-zone-outer + #ui-zone-hud) ---
+       SSoT for: "where does my UI live, and how does it know the bars' positions?"
+
+       #ui-zone-outer  — bar-aware full-width content rectangle. Flush to viewport
+                         left/right edges; clamped between real top + bottom bars
+                         via --fr-*-occupied-px (ResizeObserver + visualViewport
+                         tracked in zone-metrics.ts). This is the "canvas content
+                         space." Most floating UI lives here.
+       #ui-zone-hud    — optional inner frame within OuterZone. Currently aspect-
+                         capped (4:3 centered) on desktop, full-width between
+                         bars on mobile. Shape is tunable later via --fr-hud-aspect
+                         and body-class-scoped CSS. Use when you want UI that
+                         hugs a specific inner frame shape.
+       Bars themselves are outside zone-space entirely.
+
+       Contract for zone-hosted UI:
+         - createPortal(content, document.getElementById("ui-zone-outer"))
+           (or "ui-zone-hud"). Use position: absolute; edges resolve against
+           the zone's real extent.
+         - The zone handles bar-aware clamping + safe-area + URL-bar collapse
+           + keyboard popup. Do NOT measure bars. Do NOT listen to
+           visualViewport for bar tracking.
+         - Empty zone area is click-transparent (pointer-events: none on
+           container). Rendered children get pointer-events: auto automatically.
+           Opt out per-child with pointer-events: none if you want click-through
+           (e.g. decorative overlays).
+         - Safegutter inner-inset wrapper intentionally deferred — future phase
+           will add an inner <div class="safegutter"> if side-gutters are needed.
+    */
+
+    /* --- OuterZone — both layouts --- */
+    #ui-zone-outer {
       position: fixed;
       top: var(--fr-top-bar-occupied-px);
       bottom: var(--fr-bottom-bar-occupied-px);
+      left: 0;
+      right: 0;
+      z-index: var(--fr-z-outer);
+      pointer-events: none;
+    }
+    #ui-zone-outer > * { pointer-events: auto; }
+
+    /* --- HUD zone — base, both layouts --- */
+    #ui-zone-hud {
+      position: fixed;
+      top: var(--fr-top-bar-occupied-px);
+      bottom: var(--fr-bottom-bar-occupied-px);
+      z-index: var(--fr-z-hud);
+      pointer-events: none;
+    }
+    #ui-zone-hud > * { pointer-events: auto; }
+
+    /* --- HUD zone — desktop: 4:3-capped centered frame --- */
+    body.layout-desktop #ui-zone-hud {
       left: 50%;
       transform: translateX(-50%);
       width: min(
         100vw,
         calc(
           (100dvh - var(--fr-top-bar-occupied-px) - var(--fr-bottom-bar-occupied-px))
-          * var(--fr-hud-safe-aspect)
+          * var(--fr-hud-aspect)
         )
       );
-      z-index: 30;
     }
-    body.layout-mobile #ui-zone-outerscreenarea,
-    body.layout-mobile #ui-zone-hudsafeframe { display: none; }
+
+    /* --- HUD zone — mobile: full-width (identical to OuterZone visually, but a
+           distinct DOM container so future aspect/centering adjustments apply
+           only to HUD-hosted UI without disturbing OuterZone tenants). --- */
+    body.layout-mobile #ui-zone-hud {
+      left: 0;
+      right: 0;
+    }
+
+    /* --- Dev-mode zone outlines (toggled by the ZNE button in Tools).
+           Dashed outlines reveal each zone's rect so zone-hosted positioning
+           is debuggable without DevTools. outline-offset: -1px keeps the
+           outline inside the zone rect so it can't be clipped at edges.
+           pointer-events unaffected — this is pure visual chrome. --- */
+    body.zone-debug #ui-zone-outer {
+      outline: 1px dashed #FF8C00;
+      outline-offset: -1px;
+    }
+    body.zone-debug #ui-zone-hud {
+      outline: 1px dashed #6495ed;
+      outline-offset: -1px;
+    }
 
     /* --- Loading screen --- */
     #loader-overlay {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: #111; z-index: 9999;
+      background: #111; z-index: var(--fr-z-debug, 9999);
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       transition: opacity 0.8s ease;
     }
+    /* Loader includes a fallback value in var() because this CSS applies BEFORE
+       initTheme() runs. Without a fallback, var(--fr-z-debug) would resolve to
+       `auto` pre-JS, letting later-in-DOM-order siblings (canvas, bars, zones)
+       paint on top of the loader during the pre-JS paint window. */
     #loader-overlay.fade-out { opacity: 0; pointer-events: none; }
 
     #loader-container {
@@ -144,7 +208,7 @@
       user-select: none; text-align: center;
       line-height: 1.4;
       max-width: 250px;
-    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-error"><div id="loader-error-msg">Something may have gone wrong.</div><div id="loader-error-code"></div><button id="loader-retry-btn">Retry</button></div><div id="loader-quote"></div><div id="loader-version"></div><div id="loader-copyright">(C) 2026 HarrisXR | Space Interactions Inc.</div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-zone-outerscreenarea"></div><div id="ui-zone-hudsafeframe"></div><div id="ui-modals"></div><script>// ============================================================
+    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-error"><div id="loader-error-msg">Something may have gone wrong.</div><div id="loader-error-code"></div><button id="loader-retry-btn">Retry</button></div><div id="loader-quote"></div><div id="loader-version"></div><div id="loader-copyright">(C) 2026 HarrisXR | Space Interactions Inc.</div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-zone-outer"></div><div id="ui-zone-hud"></div><div id="ui-modals"></div><script>// ============================================================
   //  Loading screen — dual-path script loader with progress tracking
   //
   //  TWO LOADING PATHS:
@@ -432,7 +496,7 @@
       var versionEl = document.getElementById('loader-version');
       if (versionEl) {
         var versionStr = 'V1.1.23';
-        var subbuild = '18:53:43';
+        var subbuild = '15:53:21';
         if (subbuild) versionStr += '_' + subbuild;
         versionEl.textContent = versionStr;
         versionEl.style.display = 'block';
