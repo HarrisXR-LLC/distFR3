@@ -1,0 +1,9 @@
+{
+  "asset":          { "version": "1.0" },
+  "geometricError": 100,
+  "root": {
+    "boundingVolume": { "box": [0, 0, 0,  50, 0, 0,  0, 50, 0,  0, 0, 50] },
+    "geometricError": 0,
+    "content":        { "uri": "Box.glb" }
+  }
+}

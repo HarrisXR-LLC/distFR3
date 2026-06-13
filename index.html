@@ -1,0 +1,610 @@
+<!doctype html><html lang="en" data-force-mobile-debug="true"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>Forerunner 3</title><style>body { margin: 0; background: #111; display: flex; justify-content: flex-start; align-items: flex-start;
+           height: 100vh; height: 100dvh; /* dvh overrides vh on modern browsers — correct mobile viewport */
+           overflow: hidden; }
+    canvas { border: 1px solid #333; }
+    #ui { position: fixed; top: 0; left: 0; width: 100%; z-index: var(--fr-z-bar); pointer-events: none;
+           padding-top: env(safe-area-inset-top, 0px); }
+    #ui * { pointer-events: auto; }
+    #ui-bottom { position: fixed; bottom: 0; left: 0; width: 100%; z-index: var(--fr-z-bar); pointer-events: none;
+                 padding-bottom: env(safe-area-inset-bottom, 0px); }
+    #ui-bottom * { pointer-events: auto; }
+    #ui *, #ui-bottom * { transition: color 300ms ease, background 300ms ease, background-color 300ms ease, border-color 300ms ease; }
+
+    /* --- Zone system (#ui-zone-outer + #ui-zone-hud) ---
+       SSoT for: "where does my UI live, and how does it know the bars' positions?"
+
+       #ui-zone-outer  — bar-aware full-width content rectangle. Flush to viewport
+                         left/right edges; clamped between real top + bottom bars
+                         via --fr-*-occupied-px (ResizeObserver + visualViewport
+                         tracked in zone-metrics.ts). This is the "canvas content
+                         space." Most floating UI lives here.
+       #ui-zone-hud    — optional inner frame within OuterZone. Currently aspect-
+                         capped (4:3 centered) on desktop, full-width between
+                         bars on mobile. Shape is tunable later via --fr-hud-aspect
+                         and body-class-scoped CSS. Use when you want UI that
+                         hugs a specific inner frame shape.
+       Bars themselves are outside zone-space entirely.
+
+       Contract for zone-hosted UI:
+         - createPortal(content, document.getElementById("ui-zone-outer"))
+           (or "ui-zone-hud"). Use position: absolute; edges resolve against
+           the zone's real extent.
+         - The zone handles bar-aware clamping + safe-area + URL-bar collapse
+           + keyboard popup. Do NOT measure bars. Do NOT listen to
+           visualViewport for bar tracking.
+         - Empty zone area is click-transparent (pointer-events: none on
+           container). Rendered children get pointer-events: auto automatically.
+           Opt out per-child with pointer-events: none if you want click-through
+           (e.g. decorative overlays).
+         - Safegutter inner-inset wrapper intentionally deferred — future phase
+           will add an inner <div class="safegutter"> if side-gutters are needed.
+    */
+
+    /* --- OuterZone — both layouts --- */
+    #ui-zone-outer {
+      position: fixed;
+      top: var(--fr-top-bar-occupied-px);
+      bottom: var(--fr-bottom-bar-occupied-px);
+      left: 0;
+      right: 0;
+      z-index: var(--fr-z-outer);
+      pointer-events: none;
+    }
+    #ui-zone-outer > * { pointer-events: auto; }
+
+    /* --- HUD zone — base, both layouts --- */
+    #ui-zone-hud {
+      position: fixed;
+      top: var(--fr-top-bar-occupied-px);
+      bottom: var(--fr-bottom-bar-occupied-px);
+      z-index: var(--fr-z-hud);
+      pointer-events: none;
+    }
+    #ui-zone-hud > * { pointer-events: auto; }
+
+    /* --- HUD zone — desktop: 4:3-capped centered frame --- */
+    body.layout-desktop #ui-zone-hud {
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(
+        100vw,
+        calc(
+          (100dvh - var(--fr-top-bar-occupied-px) - var(--fr-bottom-bar-occupied-px))
+          * var(--fr-hud-aspect)
+        )
+      );
+    }
+
+    /* --- HUD zone — mobile: full-width (identical to OuterZone visually, but a
+           distinct DOM container so future aspect/centering adjustments apply
+           only to HUD-hosted UI without disturbing OuterZone tenants). --- */
+    body.layout-mobile #ui-zone-hud {
+      left: 0;
+      right: 0;
+    }
+
+    /* --- Dev-mode zone outlines (toggled by the ZNE button in Tools).
+           Dashed outlines reveal each zone's rect so zone-hosted positioning
+           is debuggable without DevTools. outline-offset: -1px keeps the
+           outline inside the zone rect so it can't be clipped at edges.
+           pointer-events unaffected — this is pure visual chrome. --- */
+    body.zone-debug #ui-zone-outer {
+      outline: 1px dashed #FF8C00;
+      outline-offset: -1px;
+    }
+    body.zone-debug #ui-zone-hud {
+      outline: 1px dashed #6495ed;
+      outline-offset: -1px;
+    }
+
+    /* --- Loading screen --- */
+    #loader-overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: #111; z-index: var(--fr-z-debug, 9999);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      transition: opacity 0.8s ease;
+    }
+    /* Loader includes a fallback value in var() because this CSS applies BEFORE
+       initTheme() runs. Without a fallback, var(--fr-z-debug) would resolve to
+       `auto` pre-JS, letting later-in-DOM-order siblings (canvas, bars, zones)
+       paint on top of the loader during the pre-JS paint window. */
+    #loader-overlay.fade-out { opacity: 0; pointer-events: none; }
+
+    #loader-container {
+      width: 250px;
+      display: flex; flex-direction: column; align-items: center;
+    }
+
+    #loader-title {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 22px; font-weight: 300; letter-spacing: 4px;
+      color: #ccc; margin-bottom: 12px; user-select: none;
+    }
+
+    /* Progress bar track — dark recessed socket */
+    #loader-bar-track {
+      width: 200px; height: 4px;
+      background: #0a0a0a;
+      border-radius: 2px;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8), inset 0 0 1px rgba(0, 0, 0, 0.5);
+      border: 1px solid #222;
+      overflow: hidden;
+    }
+
+    /* Progress bar fill — white/gray animated gradient (darker gray for visibility) */
+    #loader-bar-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, #777 0%, #ddd 50%, #777 100%);
+      background-size: 200% 100%;
+      animation: bar-shimmer 1.5s ease-in-out infinite;
+      transition: width 0.15s ease-out;
+    }
+    @keyframes bar-shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Status text */
+    #loader-status {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 10px; font-weight: 400;
+      color: #666; margin-top: 8px;
+      user-select: none; letter-spacing: 0.5px;
+    }
+
+    /* Error panel shown after 20s or on explicit error */
+    #loader-error {
+      display: none;
+      margin-top: 16px;
+      text-align: center;
+    }
+    #loader-error-msg {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 12px; font-weight: 400;
+      color: #c66; margin-bottom: 8px;
+      user-select: none;
+    }
+    #loader-error-code {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 10px; font-weight: 400;
+      color: #888; margin-bottom: 12px;
+      user-select: none;
+    }
+    #loader-retry-btn {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 12px; font-weight: 400;
+      color: #ccc; background: #333; border: 1px solid #555;
+      border-radius: 4px; padding: 6px 18px;
+      cursor: pointer; user-select: none;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+    #loader-retry-btn:hover {
+      background: #444; border-color: #777;
+    }
+
+    /* Version info — shown under quote when devmode is baked in */
+    #loader-version {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 9px; font-weight: 400;
+      color: #444; margin-top: 12px;
+      user-select: none; letter-spacing: 0.5px;
+      display: none; /* shown via JS when devmode is on */
+    }
+
+    #loader-copyright {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 10px; font-weight: 400;
+      color: #555; margin-top: 16px;
+      user-select: none; letter-spacing: 0.5px;
+    }
+
+    /* Astronaut quote — shown during loading */
+    #loader-quote {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 15px; font-weight: 300; font-style: italic;
+      color: #fff; margin-top: 32px; margin-bottom: 32px;
+      user-select: none; text-align: center;
+      line-height: 1.4;
+      max-width: 250px;
+    }</style></head><body><div id="loader-overlay"><div id="loader-container"><div id="loader-title">FORERUNNER 3.0</div><div id="loader-bar-track"><div id="loader-bar-fill"></div></div><div id="loader-status">Preparing...</div><div id="loader-error"><div id="loader-error-msg">Something may have gone wrong.</div><div id="loader-error-code"></div><button id="loader-retry-btn">Retry</button></div><div id="loader-quote"></div><div id="loader-version"></div><div id="loader-copyright">(C) 2026 HarrisXR | Space Interactions Inc.</div></div></div><div id="ui"></div><canvas id="canvas" width="800" height="600"></canvas><div id="ui-bottom"></div><div id="ui-zone-outer"></div><div id="ui-zone-hud"></div><div id="ui-modals"></div><script>// ============================================================
+  //  Loading screen — dual-path script loader with progress tracking
+  //
+  //  TWO LOADING PATHS:
+  //
+  //  PATH 1 — HTTP/HTTPS (dev server, production, GitHub Pages):
+  //    Uses fetch() + ReadableStream to download scripts in PARALLEL
+  //    with byte-accurate progress tracking via Content-Length headers.
+  //    Once all downloads finish, scripts are injected in ORDER
+  //    (tles.js before bundle.js) since bundle depends on TLE data.
+  //
+  //  PATH 2 — file:// (opening dist/index.html directly):
+  //    fetch() is blocked by CORS on the file:// protocol, so we fall
+  //    back to injecting <script src="..."> tags sequentially. Progress
+  //    is stage-based (jumps per file) rather than byte-accurate, but
+  //    everything loads and executes correctly.
+  //
+  //  ADDING NEW SCRIPTS:
+  //    Just add an entry to the FILES array. Both paths use it.
+  //    Scripts download in parallel (PATH 1) but always execute in
+  //    the order listed.
+  //
+  //  LOADER LIFECYCLE:
+  //    The loader stays visible until the main app calls window.hideLoader()
+  //    after its first frame renders. This prevents a blank flash between
+  //    the loader fading out and the WebGL canvas being ready.
+  //    See main.ts: if (!loaderHidden) { window.hideLoader(); }
+  // ============================================================
+  (function() {
+    // --- Mobile/desktop decision (made once, at page open) ---
+    // Driven by FORCE_MOBILE_DEBUG, baked by webpack into the
+    // <html data-force-mobile-debug> attribute from a .bat env var.
+    // Read from the attribute (not an inline EJS expression) so IDE
+    // JS-parsers don't choke on the template tag mid-expression.
+    // Later: auto-detection (viewport size, touch, UA).
+    var forceMobileDebug = document.documentElement.dataset.forceMobileDebug === 'true';
+
+    // --- Canvas sizing (viewport × DPR) ---
+    // Primes the canvas at native resolution from page open.
+    // Ready for future WebGL loading visuals (procedural wireframe, etc.).
+    // applyFullSize() in the bundle will take over via its own resize listeners.
+    var canvas = document.getElementById('canvas');
+    if (canvas) {
+      function sizeCanvas() {
+        var pixelRatio = window.devicePixelRatio || 1;  // fresh each call (DPR can change)
+        var vv = window.visualViewport;
+        var vw = vv ? vv.width : window.innerWidth;
+        var vh = vv ? vv.height : window.innerHeight;
+        canvas.width = vw * pixelRatio;
+        canvas.height = vh * pixelRatio;
+        canvas.style.width = vw + 'px';
+        canvas.style.height = vh + 'px';
+        canvas.style.border = 'none';
+        canvas.style.margin = '0';
+      }
+
+      sizeCanvas();
+
+      // Keep canvas correct if mobile URL bar hides/shows during loading
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', sizeCanvas);
+      }
+      window.addEventListener('resize', sizeCanvas);
+    }
+
+    // --- Configurable resource list ---
+    // Add new scripts here. They download in parallel but execute in this order.
+    // The assetpack entries are generated at build time from the assetpack*.js
+    // files actually present in assets_compiled/ (ASSET_PACKS in
+    // webpack.config.js), so the list can never drift from the build output.
+    // Never hand-add pack lines here.
+    var FILES = [
+      { url: 'tles.js',   label: 'TLE data' },
+      { url: 'assetpack1.js',   label: 'asset pack 1' },
+      { url: 'bundle.js', label: 'application' }
+    ];
+
+    var barFill = document.getElementById('loader-bar-fill');
+    var statusEl = document.getElementById('loader-status');
+    var isFileProtocol = window.location.protocol === 'file:';
+
+    // ================================================================
+    //  PATH 1 — HTTP/HTTPS: fetch() with byte-accurate progress
+    // ================================================================
+    function loadViaFetch() {
+      // Track download state for each file
+      var fileStates = FILES.map(function(f) {
+        return { url: f.url, label: f.label, loaded: 0, total: 0, done: false, text: null };
+      });
+
+      // --- Update progress bar and status text ---
+      function updateProgress() {
+        var totalBytes = 0;
+        var loadedBytes = 0;
+        var activeLabels = [];
+
+        for (var i = 0; i < fileStates.length; i++) {
+          var s = fileStates[i];
+          totalBytes += s.total;
+          loadedBytes += s.loaded;
+          if (!s.done) activeLabels.push(s.label);
+        }
+
+        // Calculate percentage. If Content-Length was missing for any file,
+        // total might be 0 — show indeterminate state.
+        var pct = totalBytes > 0 ? Math.min(100, (loadedBytes / totalBytes) * 100) : 0;
+        barFill.style.width = pct + '%';
+
+        if (activeLabels.length > 0) {
+          statusEl.textContent = 'Loading ' + activeLabels.join(' & ') + '...';
+        } else {
+          statusEl.textContent = 'Initializing...';
+        }
+      }
+
+      // --- Fetch a single file with byte-level streaming progress ---
+      function fetchWithProgress(index) {
+        var file = FILES[index];
+        var state = fileStates[index];
+
+        return fetch(file.url).then(function(response) {
+          var contentLength = response.headers.get('Content-Length');
+          state.total = contentLength ? parseInt(contentLength, 10) : 0;
+
+          // If no ReadableStream support or no Content-Length, simple fallback
+          if (!response.body || !contentLength) {
+            return response.text().then(function(text) {
+              state.text = text;
+              state.loaded = state.total || text.length;
+              state.total = state.loaded;
+              state.done = true;
+              updateProgress();
+            });
+          }
+
+          // Stream the response, tracking bytes as they arrive
+          var reader = response.body.getReader();
+          var chunks = [];
+          var received = 0;
+
+          function read() {
+            return reader.read().then(function(result) {
+              if (result.done) {
+                var blob = new Blob(chunks);
+                return blob.text().then(function(text) {
+                  state.text = text;
+                  state.done = true;
+                  updateProgress();
+                });
+              }
+              chunks.push(result.value);
+              received += result.value.length;
+              state.loaded = received;
+              updateProgress();
+              return read();
+            });
+          }
+
+          return read();
+        });
+      }
+
+      // --- Inject a script from downloaded text ---
+      function injectScript(text) {
+        return new Promise(function(resolve) {
+          var script = document.createElement('script');
+          script.textContent = text;
+          document.body.appendChild(script);
+          resolve();
+        });
+      }
+
+      // Fetch all files in parallel for fastest download
+      var fetches = FILES.map(function(_, i) {
+        return fetchWithProgress(i);
+      });
+
+      // Once all downloads complete, inject scripts in order.
+      // Order matters: tles.js sets up global TLE data that bundle.js
+      // needs at parse time. Injecting out of order would crash the app.
+      Promise.all(fetches).then(function() {
+        statusEl.textContent = 'Initializing...';
+
+        var chain = Promise.resolve();
+        for (var i = 0; i < fileStates.length; i++) {
+          (function(idx) {
+            chain = chain.then(function() {
+              return injectScript(fileStates[idx].text);
+            });
+          })(i);
+        }
+        return chain;
+      }).catch(function(err) {
+        statusEl.textContent = 'Error loading: ' + err.message;
+        console.error('Loader error:', err);
+      });
+    }
+
+    // ================================================================
+    //  PATH 2 — file:// : <script src> tags with stage-based progress
+    //  fetch() is blocked by CORS on file://, so we inject <script> tags
+    //  with src attributes, which the browser loads natively. Progress
+    //  jumps per-file (not byte-accurate) but everything works correctly.
+    // ================================================================
+    function loadViaScriptTags() {
+      var loaded = 0;
+      var total = FILES.length;
+
+      // Load scripts one at a time, in order, to guarantee dependencies.
+      // tles.js must finish executing before bundle.js is loaded.
+      function loadNext(index) {
+        if (index >= total) {
+          statusEl.textContent = 'Initializing...';
+          barFill.style.width = '100%';
+          return;
+        }
+
+        var file = FILES[index];
+        statusEl.textContent = 'Loading ' + file.label + '...';
+
+        var script = document.createElement('script');
+        script.src = file.url;
+
+        script.onload = function() {
+          loaded++;
+          // Stage-based progress: each file is an equal fraction of the bar.
+          // Not byte-proportional, but functional for file:// usage.
+          barFill.style.width = ((loaded / total) * 100) + '%';
+          loadNext(index + 1);
+        };
+
+        script.onerror = function() {
+          statusEl.textContent = 'Error loading ' + file.label;
+          console.error('Failed to load:', file.url);
+        };
+
+        document.body.appendChild(script);
+      }
+
+      loadNext(0);
+    }
+
+    // --- Choose loading path based on protocol ---
+    if (isFileProtocol) {
+      // file:// — use script tags (fetch is blocked by CORS)
+      loadViaScriptTags();
+    } else {
+      // http(s):// — use fetch with streaming progress
+      loadViaFetch();
+    }
+
+    // --- Astronaut quotes — shown as a reward before "drawing the curtains" ---
+    var QUOTES = [
+      '"That\'s one small step for man, one giant leap for mankind." \u2014 Neil Armstrong',
+      '"The Earth is the cradle of humanity, but one cannot live in a cradle forever." \u2014 Konstantin Tsiolkovsky',
+      '"I see Earth! It is so beautiful!" \u2014 Yuri Gagarin',
+      '"The sky is not the limit. It\'s just the view." \u2014 Buzz Aldrin',
+      '"Once you\'ve been in space, you appreciate how small and fragile the Earth is." \u2014 Valentina Tereshkova',
+      '"Exploration is really the essence of the human spirit." \u2014 Frank Borman',
+      '"Somewhere, something incredible is waiting to be known." \u2014 Carl Sagan',
+      '"The universe is under no obligation to make sense to you." \u2014 Neil deGrasse Tyson',
+      '"To confine our attention to terrestrial matters would be to limit the human spirit." \u2014 Stephen Hawking',
+      '"I know the sky is not the limit, because there are footprints on the Moon." \u2014 Buzz Aldrin',
+      '"Earth is a very small stage in a vast cosmic arena." \u2014 Carl Sagan',
+      '"The stars don\'t look bigger, but they do look brighter." \u2014 Sally Ride',
+      '"Space is for everybody. It\'s not just for a few people in science or math." \u2014 Christa McAuliffe'
+    ];
+
+    // Show a random quote immediately while loading
+    var quoteEl = document.getElementById('loader-quote');
+    if (quoteEl) {
+      quoteEl.textContent = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+    }
+
+    // --- Mobile overlay adjustments + version display ---
+    if (forceMobileDebug) {
+      // Widen loader container and quote to use more of the narrow mobile screen
+      var container = document.getElementById('loader-container');
+      if (container) {
+        container.style.width = '85vw';
+        container.style.maxWidth = '400px';
+      }
+      var quoteEl2 = document.getElementById('loader-quote');
+      if (quoteEl2) {
+        quoteEl2.style.maxWidth = '85vw';
+      }
+      // Widen progress bar to fill wider container
+      var barTrack = document.getElementById('loader-bar-track');
+      if (barTrack) {
+        barTrack.style.width = '100%';
+      }
+
+      // Show version under quote when devmode is baked in
+      var versionEl = document.getElementById('loader-version');
+      if (versionEl) {
+        var versionStr = 'V1.2.20';
+        var subbuild = '20:05:23';
+        if (subbuild) versionStr += '_' + subbuild;
+        versionEl.textContent = versionStr;
+        versionEl.style.display = 'block';
+      }
+    }
+
+    // --- Tiered init timeout ---
+    // After scripts finish loading and "Initializing..." appears, start timing.
+    // 10s → show spinner (still working indicator)
+    // 20s → show "Something may have gone wrong" + error code + retry button
+    var initTimerStarted = false;
+    var initTimer10 = null;
+    var initTimer20 = null;
+    var initErrorCode = null;
+    var loaderDone = false;
+
+    function startInitTimer() {
+      if (initTimerStarted) return;
+      initTimerStarted = true;
+
+      initTimer10 = setTimeout(function() {
+        if (loaderDone) return;
+        var statusEl2 = document.getElementById('loader-status');
+        if (statusEl2) statusEl2.textContent = 'Initializing... ...';
+      }, 10000);
+
+      initTimer20 = setTimeout(function() {
+        if (loaderDone) return;
+        showInitError(initErrorCode || 'E0', 'Initialization timed out');
+      }, 20000);
+    }
+
+    function showInitError(code, detail) {
+      var errorPanel = document.getElementById('loader-error');
+      var errorCodeEl = document.getElementById('loader-error-code');
+      if (errorPanel) errorPanel.style.display = 'block';
+      if (errorCodeEl) errorCodeEl.textContent = 'Error code: ' + code;
+      // Console logging is handled by reportInitError() in the bundle — no double-log here.
+    }
+
+    // Called by main.ts (via tle-manager.ts or directly) when a specific init step fails
+    window.setInitError = function(code, detail) {
+      initErrorCode = code;
+      // If the 20s timer hasn't fired yet, show immediately
+      if (!loaderDone) {
+        if (initTimer10) clearTimeout(initTimer10);
+        if (initTimer20) clearTimeout(initTimer20);
+        showInitError(code, detail);
+      }
+    };
+
+    // Called by the bundle when an init error fires AFTER the loader has already been dismissed.
+    // 4/5/26 --AH Ready to wire into a toast system as a future todo
+    window.notifyLateInitError = function(code, detail) {
+      if (loaderDone) {
+        console.warn('[Late init error] ' + code + ': ' + detail);
+      }
+    };
+
+    // Retry button — full page reload
+    var retryBtn = document.getElementById('loader-retry-btn');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', function() {
+        window.location.reload();
+      });
+    }
+
+    // Start the init timer once "Initializing..." is shown.
+    // For PATH 1 (fetch), this happens after Promise.all resolves.
+    // For PATH 2 (script tags), this happens after all scripts load.
+    // We watch for the status text change via a MutationObserver on #loader-status.
+    var statusObserver = new MutationObserver(function() {
+      var s = document.getElementById('loader-status');
+      if (s && s.textContent && s.textContent.indexOf('nitializing') !== -1) {
+        startInitTimer();
+        statusObserver.disconnect();
+      }
+    });
+    var statusTarget = document.getElementById('loader-status');
+    if (statusTarget) {
+      statusObserver.observe(statusTarget, { childList: true, characterData: true, subtree: true });
+    }
+
+    // --- Hide loader ---
+    // Called by the main app (main.ts) after its first frame renders.
+    // Holds for ~1 second to let assets settle and give the user a moment
+    // to read the quote, then fades out the loader overlay.
+    // The main app contains: if (!loaderHidden) { window.hideLoader(); }
+    window.hideLoader = function() {
+      loaderDone = true;
+      if (initTimer10) clearTimeout(initTimer10);
+      if (initTimer20) clearTimeout(initTimer20);
+
+      var overlay = document.getElementById('loader-overlay');
+      if (!overlay) return;
+
+      // Hold for 1 second to let assets settle, then fade out
+      setTimeout(function() {
+        overlay.classList.add('fade-out');
+        setTimeout(function() { overlay.remove(); }, 900);
+      }, 1000);
+    };
+  })();</script></body></html>
